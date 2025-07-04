@@ -1,7 +1,11 @@
-"""Utility functions for quantization-aware training."""
+"""Utility functions for quantization-aware training and model optimization."""
+import copy
 import torch
 import torch.nn as nn
-from typing import Optional, Dict, Any, List, Union
+import torch.quantization as quant
+from typing import Optional, Dict, Any, List, Union, Tuple, Type
+from dataclasses import dataclass, field
+from tqdm import tqdm
 
 
 def prepare_model_for_quantization(
@@ -170,5 +174,3 @@ def print_quantization_summary(model: nn.Module) -> None:
                 print(f"  Weight fake quant: {module.weight_fake_quant}")
             if hasattr(module, 'activation_post_process'):
                 print(f"  Activation post-process: {module.activation_post_process}")
-    
-    print("\n" + "=" * 80)

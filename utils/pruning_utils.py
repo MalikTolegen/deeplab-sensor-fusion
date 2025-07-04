@@ -1,274 +1,209 @@
+"""Pruning utilities for model optimization."""
 import torch
 import torch.nn as nn
 import torch.nn.utils.prune as prune
-from typing import List, Dict, Any, Optional, Tuple, Union, Callable
+from typing import List, Dict, Any, Optional, Callable, Union, Tuple
+import math
+from dataclasses import dataclass, field
 from tqdm import tqdm
-import numpy as np
 from collections import defaultdict
 
-# Import configuration
-import sys
-import os
-from typing import Any, List, Dict, Callable, Tuple, Optional
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.utils.prune as prune
-from tqdm import tqdm
-
-# Try to import PRUNING_CFG, but don't fail if it's not available yet
-try:
-    from config.model_cfg import PRUNING_CFG
-except ImportError:
-    # Define a default config if not available
-    class PRUNING_CFG:
-        enabled = True
-        initial_sparsity = 0.1
-        target_sparsity = 0.7
-        prune_epochs = []
-        pruning_method = 'l2_structured'
-        dim = 0
-        global_pruning = True
-        exclude_layers = ['classifier', 'fusion', 'aux_classifier']
-        skip_1x1_convs = True
+@dataclass
+class PruningStats:
+    """Class to track pruning statistics."""
+    total_params: int = 0
+    pruned_params: int = 0
+    layer_stats: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    
+    @property
+    def sparsity(self) -> float:
+        """Calculate overall sparsity."""
+        return self.pruned_params / self.total_params if self.total_params > 0 else 0.0
+    
+    def add_layer(self, name: str, total: int, pruned: int) -> None:
+        """Add layer statistics."""
+        self.total_params += total
+        self.pruned_params += pruned
+        self.layer_stats[name] = {
+            'total': total,
+            'pruned': pruned,
+            'sparsity': pruned / total if total > 0 else 0.0
+        }
+    
+    def format_stats(self) -> str:
+        """Format statistics as a string."""
+        lines = [
+            f"Total Parameters: {self.total_params:,}",
+            f"Pruned Parameters: {self.pruned_params:,}",
+            f"Sparsity: {self.sparsity:.2%}",
+            "\nLayer-wise Statistics:"
+        ]
+        
+        for name, stats in self.layer_stats.items():
+            lines.append(
+                f"  {name}: {stats['pruned']:,}/{stats['total']:,} "
+                f"({stats['sparsity']:.2%}) pruned"
+            )
+            
+        return "\n".join(lines)
 
 class ModelPruner:
-    """
-    A utility class for pruning PyTorch models with support for both
-    structured and unstructured pruning strategies.
+    """A class to handle model pruning with various strategies."""
     
-    Structured pruning is recommended for GPUs as it creates regular sparse patterns
-    that can be efficiently utilized by hardware for speed-ups.
-    """
-    
-    def __init__(self, model: nn.Module, config: Any = PRUNING_CFG):
-        """
-        Initialize the ModelPruner.
+    def __init__(self, model: nn.Module, config: Dict[str, Any]):
+        """Initialize the ModelPruner.
         
         Args:
-            model: The PyTorch model to be pruned
-            config: Pruning configuration (defaults to PRUNING_CFG from config)
+            model: The PyTorch model to prune
+            config: Configuration dictionary containing pruning parameters
         """
         self.model = model
         self.config = config
         self.pruning_parameters = []
-        self.layer_sparsity = {}
+        self.pruning_stats = PruningStats()
         self._initialize_pruning_parameters()
-        
+    
     def _initialize_pruning_parameters(self) -> None:
-        """Initialize pruning parameters based on model architecture."""
-        self.pruning_parameters = []
-        
-        # Default layer types to prune if not specified
-        layer_types = [nn.Conv2d, nn.Linear]
-        
-        # Find all prunable layers
+        """Initialize parameters that will be pruned."""
         for name, module in self.model.named_modules():
-            # Skip excluded layers
-            if any(excluded in name for excluded in self.config.exclude_layers):
-                continue
-                
-            # Check if layer type should be pruned
-            if any(isinstance(module, layer_type) for layer_type in layer_types):
-                # Skip 1x1 convolutions in residual connections if needed
-                if isinstance(module, nn.Conv2d) and all(k == 1 for k in module.kernel_size):
-                    if self.config.skip_1x1_convs:
-                        continue
-                
-                self.pruning_parameters.append({
-                    'module': module,
-                    'name': name,
-                    'type': type(module).__name__,
-                    'shape': module.weight.shape,
-                    'dim': self._get_pruning_dim(module)
-                })
-                
-        print(f"Found {len(self.pruning_parameters)} prunable layers")
+            if isinstance(module, (nn.Conv2d, nn.Linear)):
+                # Skip output layers
+                if any(x in name for x in ['classifier', 'fc', 'head', 'aux']):
+                    continue
+                # Skip excluded layers
+                if any(excluded in name for excluded in self.config.get('exclude_layers', [])):
+                    continue
+                self.pruning_parameters.append((name, module, 'weight'))
     
-    def _get_pruning_dim(self, module: nn.Module) -> int:
-        """Get the pruning dimension based on layer type and config."""
-        if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
-            # For Conv2d, dimension 0 is output channels, 1 is input channels
-            return 0  # Default to filter pruning (output channels)
-        elif isinstance(module, nn.Linear):
-            # For Linear, dimension 0 is output features, 1 is input features
-            return 0  # Default to output features pruning
-        return 0  # Default fallback
+    def get_pruning_hook(self) -> Callable:
+        """Get a hook function that can be called during training."""
+        def pruning_hook(epoch: int, **kwargs) -> None:
+            """Prune the model based on the current epoch.
+            
+            Args:
+                epoch: Current training epoch
+            """
+            if not self.config.get('enabled', False):
+                return
+                
+            start_epoch = self.config.get('start_epoch', 0)
+            end_epoch = self.config.get('end_epoch', 30)
+            frequency = self.config.get('frequency', 1)
+            
+            if (epoch < start_epoch) or (epoch > end_epoch) or ((epoch - start_epoch) % frequency != 0):
+                return
+                
+            # Calculate current target sparsity
+            progress = min(1.0, (epoch - start_epoch) / (end_epoch - start_epoch))
+            current_sparsity = self.config.get('initial_sparsity', 0.1) + \
+                             (self.config.get('target_sparsity', 0.5) - 
+                              self.config.get('initial_sparsity', 0.1)) * progress
+            
+            # Apply pruning
+            self.prune_model(current_sparsity)
+            
+            # Print pruning info
+            print(f"\nPruning at epoch {epoch}: Target sparsity = {current_sparsity:.2f}")
+            print(self.pruning_stats.format_stats())
+        
+        return pruning_hook
     
-    def global_prune(self, amount: float = None, 
-                    pruning_method: str = None,
-                    verbose: bool = True) -> None:
-        """
-        Apply global pruning across all specified layers.
+    def prune_model(self, target_sparsity: float) -> None:
+        """Prune the model to the target sparsity.
         
         Args:
-            amount: Fraction of connections to prune (0.0 - 1.0). If None, uses config value.
-            pruning_method: Pruning method ('l1_unstructured', 'l2_structured', etc.)
-                           If None, uses config value.
-            verbose: Whether to print pruning details
+            target_sparsity: Target sparsity ratio (0-1)
         """
-        if amount is None:
-            amount = self.config.target_sparsity
-            
-        if pruning_method is None:
-            pruning_method = self.config.pruning_method
-            
-        if not self.pruning_parameters:
-            self._initialize_pruning_parameters()
+        prune_type = self.config.get('prune_type', 'l1_unstructured')
+        global_pruning = self.config.get('global_pruning', True)
         
-        # For structured pruning, we need to handle it differently
-        if 'structured' in pruning_method:
-            self._structured_prune(amount=amount, pruning_method=pruning_method, verbose=verbose)
+        # Reset stats
+        self.pruning_stats = PruningStats()
+        
+        if global_pruning:
+            self._global_pruning(prune_type, target_sparsity)
         else:
-            # Original unstructured pruning logic
-            parameters_to_prune = [
-                (param['module'], 'weight') for param in self.pruning_parameters
-            ]
-            
+            self._local_pruning(prune_type, target_sparsity)
+    
+    def _global_pruning(self, prune_type: str, target_sparsity: float) -> None:
+        """Apply global pruning across all parameters."""
+        parameters_to_prune = [
+            (module, 'weight') for _, module, _ in self.pruning_parameters
+        ]
+        
+        if prune_type == 'l1_unstructured':
             prune.global_unstructured(
                 parameters_to_prune,
-                pruning_method=pruning_method,
-                amount=amount,
+                pruning_method=prune.L1Unstructured,
+                amount=target_sparsity
             )
-            
-            if verbose:
-                self.print_pruning_stats()
+        elif prune_type == 'l2_structured':
+            prune.global_structured(
+                parameters_to_prune,
+                pruning_method=prune.LnStructured,
+                amount=target_sparsity,
+                dim=self.config.get('prune_dim', 0),
+                n=2
+            )
+        elif prune_type == 'ln_structured':
+            prune.global_structured(
+                parameters_to_prune,
+                pruning_method=prune.LnStructured,
+                amount=target_sparsity,
+                dim=self.config.get('prune_dim', 0),
+                n=1
+            )
+        
+        # Update statistics
+        self._update_pruning_stats()
     
-    def _structured_prune(self, amount: float, pruning_method: str, verbose: bool = True) -> None:
-        """
-        Apply structured pruning to the model.
+    def _local_pruning(self, prune_type: str, target_sparsity: float) -> None:
+        """Apply local pruning to each parameter individually."""
+        for name, module, _ in self.pruning_parameters:
+            if prune_type == 'l1_unstructured':
+                prune.l1_unstructured(module, 'weight', amount=target_sparsity)
+            elif prune_type == 'l2_structured':
+                prune.ln_structured(
+                    module, 'weight', 
+                    amount=target_sparsity,
+                    dim=self.config.get('prune_dim', 0),
+                    n=2
+                )
+            elif prune_type == 'ln_structured':
+                prune.ln_structured(
+                    module, 'weight',
+                    amount=target_sparsity,
+                    dim=self.config.get('prune_dim', 0),
+                    n=1
+                )
         
-        Args:
-            amount: Fraction of connections to prune (0.0 - 1.0)
-            pruning_method: Pruning method ('l2_structured', 'l1_structured', etc.)
-            verbose: Whether to print pruning details
-        """
-        if verbose:
-            print(f"\nApplying {pruning_method} structured pruning to {len(self.pruning_parameters)} layers")
-            print(f"Target sparsity: {amount:.1%}")
-        
-        # For global structured pruning, we need to collect all parameters first
-        if self.config.global_pruning:
-            all_weights = []
-            param_groups = []
-            
-            # Collect all weights for global pruning
-            for param in self.pruning_parameters:
-                module = param['module']
-                weight = module.weight.detach().cpu().numpy()
-                dim = param['dim']
-                
-                # For structured pruning, we need to compute the norm along the pruning dimension
-                if dim == 0:  # Output channels (filters)
-                    norm = np.linalg.norm(weight.reshape(weight.shape[0], -1), ord=2, axis=1)
-                else:  # Input channels
-                    norm = np.linalg.norm(weight.reshape(weight.shape[0], -1), ord=2, axis=0)
-                
-                all_weights.append(norm)
-                param_groups.append((module, dim, weight.shape[dim]))
-            
-            # Concatenate all norms and find global threshold
-            all_weights = np.concatenate(all_weights)
-            threshold = np.percentile(all_weights, amount * 100)
-            
-            # Apply pruning based on global threshold
-            for (module, dim, size), norms in zip(param_groups, all_weights):
-                # Create binary mask (1 = keep, 0 = prune)
-                mask = torch.ones(size, dtype=torch.float32, device=module.weight.device)
-                mask[norms < threshold] = 0
-                
-                # Apply the mask
-                if dim == 0:  # Output channels
-                    module.weight.data = module.weight.data * mask.view(-1, 1, 1, 1)
-                else:  # Input channels
-                    module.weight.data = module.weight.data * mask.view(1, -1, 1, 1)
-                
-                # Update layer sparsity
-                self.layer_sparsity[module] = 1.0 - float(mask.sum().item()) / mask.numel()
-        else:
-            # Layer-wise structured pruning
-            for param in self.pruning_parameters:
-                module = param['module']
-                weight = module.weight.detach()
-                dim = param['dim']
-                
-                # Compute L2 norm along the pruning dimension
-                if dim == 0:  # Output channels (filters)
-                    norm = torch.norm(weight.view(weight.size(0), -1), p=2, dim=1)
-                else:  # Input channels
-                    norm = torch.norm(weight.view(weight.size(0), -1), p=2, dim=0)
-                
-                # Determine number of channels to keep
-                num_prune = int(len(norm) * amount)
-                if num_prune == 0:
-                    continue
-                    
-                # Get threshold
-                threshold = torch.kthvalue(norm, num_prune).values
-                
-                # Create mask
-                mask = torch.ones_like(norm, device=weight.device)
-                mask[norm <= threshold] = 0
-                
-                # Apply mask
-                if dim == 0:  # Output channels
-                    module.weight.data = module.weight.data * mask.view(-1, 1, 1, 1)
-                else:  # Input channels
-                    module.weight.data = module.weight.data * mask.view(1, -1, 1, 1)
-                
-                # Update layer sparsity
-                self.layer_sparsity[module] = 1.0 - float(mask.sum().item()) / mask.numel()
-        
-        if verbose:
-            self.print_pruning_stats()
+        # Update statistics
+        self._update_pruning_stats()
     
-    def layerwise_prune(self, layer_amounts: Dict[str, float], 
-                       pruning_method: str = None,
-                       verbose: bool = True) -> None:
-        """
-        Apply different pruning amounts to specific layers.
-        
-        Args:
-            layer_amounts: Dictionary mapping layer names to pruning amounts (0.0 - 1.0)
-            pruning_method: Pruning method to use (defaults to config value)
-            verbose: Whether to print pruning details
-        """
-        if pruning_method is None:
-            pruning_method = self.config.pruning_method
+    def _update_pruning_stats(self) -> None:
+        """Update pruning statistics."""
+        for name, module, param_name in self.pruning_parameters:
+            param = getattr(module, param_name)
+            mask = getattr(module, f"{param_name}_mask", None)
             
-        if not self.pruning_parameters:
-            self._initialize_pruning_parameters()
-        
-        # Convert layer names to modules
-        name_to_module = {param['name']: param['module'] for param in self.pruning_parameters}
-        
-        for name, amount in layer_amounts.items():
-            if name in name_to_module:
-                module = name_to_module[name]
-                
-                if 'structured' in pruning_method:
-                    # Handle structured pruning
-                    param = next(p for p in self.pruning_parameters if p['name'] == name)
-                    self._structured_prune_single_layer(
-                        module=module,
-                        amount=amount,
-                        pruning_method=pruning_method,
-                        dim=param['dim']
-                    )
-                else:
-                    # Handle unstructured pruning
-                    prune.l1_unstructured(
-                        module, 
-                        name='weight', 
-                        amount=amount
-                    )
-                
-                # Update layer sparsity
-                self.layer_sparsity[module] = amount
-        
-        if verbose:
-            self.print_pruning_stats()
+            if mask is not None:
+                total = param.numel()
+                pruned = int(torch.sum(mask == 0).item())
+                self.pruning_stats.add_layer(name, total, pruned)
     
+    def apply_pruning(self) -> None:
+        """Apply pruning masks permanently by removing the reparameterization."""
+        for _, module, param_name in self.pruning_parameters:
+            prune.remove(module, param_name)
+    
+    def get_pruning_summary(self) -> Dict[str, Any]:
+        """Get a summary of pruning statistics."""
+        return {
+            'total_parameters': self.pruning_stats.total_params,
+            'pruned_parameters': self.pruning_stats.pruned_params,
+            'sparsity': self.pruning_stats.sparsity,
+            'layer_stats': self.pruning_stats.layer_stats
+        }
     def _structured_prune_single_layer(self, module: nn.Module, amount: float, 
                                      pruning_method: str, dim: int) -> None:
         """
