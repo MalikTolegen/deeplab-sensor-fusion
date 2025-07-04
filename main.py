@@ -94,7 +94,7 @@ def train():
                                   )
 
     train_dataloader = DataLoader(dataset=train_dataset,
-                                  batch_size=TRAIN_DATALOADER_CFG.bathc_size,
+                                  batch_size=TRAIN_DATALOADER_CFG.batch_size,
                                   shuffle=TRAIN_DATALOADER_CFG.shuffle,
                                   num_workers=TRAIN_DATALOADER_CFG.num_worker,
                                   collate_fn=base_collate_fn)
@@ -120,7 +120,7 @@ def train():
 
     valid_dataloader = DataLoader(
         dataset=valid_dataset,
-        batch_size=VALID_DATALOADER_CFG.bathc_size,
+        batch_size=VALID_DATALOADER_CFG.batch_size,
         shuffle=VALID_DATALOADER_CFG.shuffle,
         num_workers=VALID_DATALOADER_CFG.num_worker,
         collate_fn=base_collate_fn
@@ -208,7 +208,7 @@ def valid():
 
     valid_dataloader = DataLoader(
         dataset=valid_dataset,
-        batch_size=VALID_DATALOADER_CFG.bathc_size,
+        batch_size=VALID_DATALOADER_CFG.batch_size,
         shuffle=VALID_DATALOADER_CFG.shuffle,
         num_workers=VALID_DATALOADER_CFG.num_worker,
         collate_fn=base_collate_fn
@@ -251,7 +251,7 @@ def test():
                                 )
 
     test_dataloader = DataLoader(dataset=test_dataset,
-                                  batch_size=TEST_DATALOADER_CFG.bathc_size,
+                                  batch_size=TEST_DATALOADER_CFG.batch_size,
                                   shuffle=TEST_DATALOADER_CFG.shuffle,
                                   num_workers=TEST_DATALOADER_CFG.num_worker,
                                   collate_fn=base_collate_fn)

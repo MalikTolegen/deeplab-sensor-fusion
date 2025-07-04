@@ -29,19 +29,19 @@ DATA_CFG = DataEntity(
 
 
 TRAIN_DATALOADER_CFG = DataloaderEntity(
-    bathc_size=16,
+    batch_size=16,
     num_worker=0,
     shuffle=True
 )
 
 VALID_DATALOADER_CFG = DataloaderEntity(
-    bathc_size=16,
+    batch_size=16,
     num_worker=0,
     shuffle=False
 )
 
 TEST_DATALOADER_CFG = DataloaderEntity(
-    bathc_size=6,
+    batch_size=6,
     num_worker=0,
     shuffle=False
 )
