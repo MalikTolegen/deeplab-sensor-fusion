@@ -3,10 +3,6 @@ import json
 import time
 import datetime
 from tqdm import tqdm
-from typing import Optional, Callable
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.pruning_utils import ModelPruner, apply_pruning_schedule
 
 import torch
 from torch import nn
@@ -287,33 +283,107 @@ def test():
     # model = model.train()
     model = model.to(DEVICE)
 
-    test_anno_path = os.path.join(DATA_CFG.root_path,
+    if TEST_MODE:
+        print("Running in TEST MODE using PASCAL VOC dataset")
+        # Use PASCAL VOC dataset for testing
+        transform = T.Compose([
+            T.Resize((256, 256)),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406],
+                       std=[0.229, 0.224, 0.225])
+        ])
+        
+        # Download PASCAL VOC dataset
+        train_dataset = dset.VOCSegmentation(
+            root='./data',
+            year='2012',
+            image_set='train',
+            download=True,
+            transform=transform,
+            target_transform=transform  # For simplicity, using same transform for mask
+        )
+        
+        valid_dataset = dset.VOCSegmentation(
+            root='./data',
+            year='2012',
+            image_set='val',
+            download=True,
+            transform=transform,
+            target_transform=transform
+        )
+        
+        num_classes = 21  # PASCAL VOC has 20 classes + background
+    else:
+        # Original dataset loading code
+        test_anno_path = os.path.join(DATA_CFG.root_path,
                                   DATA_CFG.test_anno_path)
 
-    with open(test_anno_path, 'r') as rf:
-        test_anno = json.load(rf)
+        with open(test_anno_path, 'r') as rf:
+            test_anno = json.load(rf)
 
-    transforms_lst = []
-    for config in TEST_PIPE:
-        transforms_lst.append(get_transforms(config))
-    transforms_lst = Compose(transforms_lst)
+        transforms_lst = []
+        for config in TEST_PIPE:
+            transforms_lst.append(get_transforms(config))
+        transforms_lst = Compose(transforms_lst)
 
-    test_dataset = ImgClsDataset(DATA_CFG, 
+        test_dataset = ImgClsDataset(DATA_CFG, 
                                 test_anno,
                                 transforms=transforms_lst
                                 )
 
-    test_dataloader = DataLoader(dataset=test_dataset,
-                                  batch_size=TEST_DATALOADER_CFG.batch_size,
+        num_classes = 5  # Your original 5 classes
+
+    # Create dataloaders
+    batch_size = 4 if TEST_MODE else TEST_DATALOADER_CFG.batch_size
+    num_workers = 2 if TEST_MODE else TEST_DATALOADER_CFG.num_worker
+    
+    if TEST_MODE:
+        train_dataloader = DataLoader(
+            dataset=train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            collate_fn=None
+        )
+        
+        valid_dataloader = DataLoader(
+            dataset=valid_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=None
+        )
+    else:
+        test_dataloader = DataLoader(dataset=test_dataset,
+                                  batch_size=batch_size,
                                   shuffle=TEST_DATALOADER_CFG.shuffle,
-                                  num_workers=TEST_DATALOADER_CFG.num_worker,
+                                  num_workers=num_workers,
                                   collate_fn=base_collate_fn)
 
     model = model.eval()
 
-    for images, masks, annotations in test_dataloader:
-        outs = model(images)['out'].squeeze()
+    if TEST_MODE:
+        for images, masks, _ in train_dataloader:
+            outs = model(images)['out'].squeeze()
+    else:
+        for images, masks, annotations in test_dataloader:
+            outs = model(images)['out'].squeeze()
 
+            num_batch = len(outs)
+            for ix in range(num_batch):
+                image = images[ix].detach().cpu().numpy()
+                image = image.transpose(1, 2, 0)
+                out = outs[ix].round().detach().cpu().numpy().astype(np.uint8)
+                mask = masks[ix].detach().cpu().numpy().astype(np.uint8)
+                fig, arr = plt.subplots(1, 3)
+                arr[0].imshow(image)
+                arr[0].set_title("image")
+                arr[1].imshow(out)
+                arr[1].set_title("Pred_Mask")
+                arr[2].imshow(mask)
+                arr[2].set_title("True_Mask")
+                plt.savefig("test.png", dpi=300)
+                plt.close()
         num_batch = len(outs)
         for ix in range(num_batch):
             image = images[ix].detach().cpu().numpy()

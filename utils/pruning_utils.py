@@ -9,8 +9,28 @@ from collections import defaultdict
 # Import configuration
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config.model_cfg import PRUNING_CFG
+from typing import Any, List, Dict, Callable, Tuple, Optional
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.utils.prune as prune
+from tqdm import tqdm
+
+# Try to import PRUNING_CFG, but don't fail if it's not available yet
+try:
+    from config.model_cfg import PRUNING_CFG
+except ImportError:
+    # Define a default config if not available
+    class PRUNING_CFG:
+        enabled = True
+        initial_sparsity = 0.1
+        target_sparsity = 0.7
+        prune_epochs = []
+        pruning_method = 'l2_structured'
+        dim = 0
+        global_pruning = True
+        exclude_layers = ['classifier', 'fusion', 'aux_classifier']
+        skip_1x1_convs = True
 
 class ModelPruner:
     """
