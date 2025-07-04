@@ -62,8 +62,8 @@ class Cbam(nn.Module):
         super(Cbam, self).__init__()
         self.channels = channels
         self.r = r
-        self.sam = SAM(bias=False)
         self.cam = CAM(channels=self.channels, r=self.r)
+        self.sam = SAM(bias=False)
 
     def forward(self, x):
         output = self.cam(x)
