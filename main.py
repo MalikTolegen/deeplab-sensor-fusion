@@ -3,6 +3,10 @@ import json
 import time
 import datetime
 from tqdm import tqdm
+from typing import Optional, Callable
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.pruning_utils import ModelPruner, apply_pruning_schedule
 
 import torch
 from torch import nn
@@ -70,12 +74,33 @@ def get_log_msg(log_msg, losses, remaining_iters):
 
 
 def model_load(model):
-    start_epoch, _ = os.path.splitext(os.path.basename(MODEL_CFG.load_from))
-    chkp = torch.load(MODEL_CFG.load_from)
-    model.load_state_dict(chkp, strict=False)
-    
-    print(f"{MODEL_CFG.load_from} is load.")
-    return model, int(start_epoch)
+    if MODEL_CFG.load_from is not None:
+        # Load the state dict
+        state_dict = torch.load(MODEL_CFG.load_from, map_location=DEVICE)
+        
+        # Handle pruned models by removing pruning buffers if they exist
+        if any('weight_orig' in key or 'weight_mask' in key for key in state_dict.keys()):
+            print("Loading pruned model, removing pruning buffers...")
+            # Create a new state dict without pruning buffers
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                if 'weight_orig' in key:
+                    # Convert pruned weights back to regular weights
+                    module_name = key.replace('.weight_orig', '')
+                    mask_key = f"{module_name}.weight_mask"
+                    if mask_key in state_dict:
+                        pruned_weight = value * state_dict[mask_key]
+                        new_state_dict[module_name + '.weight'] = pruned_weight
+                elif 'weight_mask' not in key and 'bias_orig' not in key and 'bias_mask' not in key:
+                    new_state_dict[key] = value
+            state_dict = new_state_dict
+        
+        # Load the state dict into the model
+        model.load_state_dict(state_dict, strict=False)
+        start_epoch = int(MODEL_CFG.load_from.split('/')[-1].split('.')[0])
+        return model, start_epoch
+    else:
+        return model, 0
 
 
 def train():
@@ -129,6 +154,18 @@ def train():
     model = get_model(MODEL_TYPE, MODEL_CFG)
     model = model.to(DEVICE)
     
+    # Initialize pruning if enabled
+    pruning_hook = None
+    if PRUNING_CFG.enabled and TRAIN_CFG.num_epoch > 0:
+        print("\nInitializing pruning...")
+        pruner, pruning_hook = apply_pruning_schedule(
+            model=model,
+            epochs=TRAIN_CFG.num_epoch,
+            initial_sparsity=PRUNING_CFG.initial_sparsity,
+            target_sparsity=PRUNING_CFG.target_sparsity,
+            prune_epochs=PRUNING_CFG.prune_epochs or None
+        )
+    
     loss_fn = nn.MSELoss(reduction='mean') # DiceFocalLoss()
     optim = Adam(model.parameters(), lr=1e-5)
     # optim = SGD(model.parameters(), lr=0.02, weight_decay=1e-4, momentum=0.9) # SGDW
@@ -144,6 +181,10 @@ def train():
     remaining_iters = len(train_dataloader) * (TRAIN_CFG.num_epoch - start_epoch + 1)
 
     for epoch in range(start_epoch, total_epoch+1):
+        # Apply pruning if enabled and it's time to prune
+        if pruning_hook is not None:
+            pruning_hook(epoch)
+            
         batch_cnt = 0
         log_losses = list()
         model = model.train()
@@ -174,7 +215,19 @@ def train():
                 log_losses = list()
                 print(log_msg, flush=True)
 
-        torch.save(model.state_dict(), f"output/{epoch}.pth")
+        # Save model state (make sure to remove pruning buffers before saving)
+        if pruning_hook is not None:
+            # Create a deep copy of the model without pruning buffers
+            from copy import deepcopy
+            model_copy = deepcopy(model)
+            for name, module in model_copy.named_modules():
+                if hasattr(module, 'weight_orig'):
+                    # Remove pruning buffers
+                    prune.remove(module, 'weight')
+            torch.save(model_copy.state_dict(), f"output/{epoch}.pth")
+            del model_copy
+        else:
+            torch.save(model.state_dict(), f"output/{epoch}.pth")
 
         model = model.eval()
         miou_lst = []
