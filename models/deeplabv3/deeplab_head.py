@@ -17,12 +17,25 @@ class DeepLabHeadWithCbam(nn.Module, QuantizableMixin):
     ) -> None:
         super().__init__()
         self.quantize = quantize
+        self.in_channels = in_channels
         
         # Initialize quantization stubs if needed
         if self.quantize:
             QuantizableMixin.__init__(self)
         
-        self.aspp = ASPPwithCbam(in_channels, atrous_rates, quantize=quantize)
+        # ASPP expects 2048 input channels by default
+        self.aspp_in_channels = 2048
+        
+        # Add a channel adjustment layer to handle different input dimensions
+        self.channel_adjust = None
+        if in_channels != self.aspp_in_channels:
+            self.channel_adjust = nn.Sequential(
+                nn.Conv2d(in_channels, self.aspp_in_channels, kernel_size=1, bias=False),
+                nn.BatchNorm2d(self.aspp_in_channels),
+                nn.ReLU(inplace=True)
+            )
+            
+        self.aspp = ASPPwithCbam(self.aspp_in_channels, atrous_rates, quantize=quantize)
         
         # Additional layers after ASPP
         self.conv1 = nn.Conv2d(256, 256, 3, padding=1, bias=False)
@@ -34,6 +47,10 @@ class DeepLabHeadWithCbam(nn.Module, QuantizableMixin):
         if self.quantize:
             x = self.quant(x)
         
+        # Adjust input channels if needed
+        if self.channel_adjust is not None:
+            x = self.channel_adjust(x)
+            
         x = self.aspp(x)
         x = self.conv1(x)
         x = self.bn1(x)
@@ -159,6 +176,7 @@ class ASPPwithCbam(nn.Module, QuantizableMixin):
     ) -> None:
         super().__init__()
         self.quantize = quantize
+        self.out_channels = out_channels
         
         # Initialize quantization stubs if needed
         if self.quantize:
@@ -180,10 +198,13 @@ class ASPPwithCbam(nn.Module, QuantizableMixin):
         # Image pooling branch
         self.image_pool = ASPPPooling(in_channels, out_channels, quantize=quantize)
         
+        # Calculate the number of branches (1x1 + atrous convs + image pool)
+        num_branches = 1 + len(rates) + 1  # 1x1 + atrous convs + image pool
+        
         # Projection
         self.project = nn.Sequential(
             nn.Conv2d(
-                (3 + len(rates)) * out_channels,
+                num_branches * out_channels,
                 out_channels,
                 kernel_size=1,
                 bias=False
@@ -208,6 +229,8 @@ class ASPPwithCbam(nn.Module, QuantizableMixin):
         # Image pooling branch
         x5 = self.image_pool(x)
         
+        # Shapes are now aligned, no debug prints needed
+        
         # Concatenate all branches
         branches = [x1]
         if x2 is not None:
@@ -217,6 +240,17 @@ class ASPPwithCbam(nn.Module, QuantizableMixin):
         if x4 is not None:
             branches.append(x4)
         branches.append(x5)
+        
+        # Ensure all branches have the same spatial dimensions
+        h, w = x1.size(2), x1.size(3)
+        for i in range(len(branches)):
+            if branches[i].size(2) != h or branches[i].size(3) != w:
+                branches[i] = F.interpolate(
+                    branches[i], 
+                    size=(h, w), 
+                    mode='bilinear', 
+                    align_corners=False
+                )
         
         # Project and return
         out = torch.cat(branches, dim=1)

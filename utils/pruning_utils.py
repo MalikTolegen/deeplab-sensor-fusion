@@ -71,7 +71,7 @@ class ModelPruner:
                 if any(x in name for x in ['classifier', 'fc', 'head', 'aux']):
                     continue
                 # Skip excluded layers
-                if any(excluded in name for excluded in self.config.get('exclude_layers', [])):
+                if hasattr(self.config, 'exclude_layers') and any(excluded in name for excluded in self.config.exclude_layers):
                     continue
                 self.pruning_parameters.append((name, module, 'weight'))
     
@@ -326,23 +326,22 @@ class ModelPruner:
         print("="*70 + "\n")
 
 def apply_pruning_schedule(
-    model: nn.Module,
-    epochs: int,
+    model: nn.Module, 
+    config, 
+    epochs: int, 
     initial_sparsity: float = None,
-    target_sparsity: float = None,
-    prune_epochs: List[int] = None,
-    config: Any = None
-) -> Tuple[ModelPruner, Callable]:
-    """
-    Apply a gradual pruning schedule over training.
+    target_sparsity: float = None, 
+    prune_epochs: Optional[List[int]] = None
+) -> Tuple['ModelPruner', Callable]:
+    """Apply a pruning schedule during training.
     
     Args:
-        model: Model to prune
+        model: The model to prune
+        config: Configuration for pruning
         epochs: Total number of training epochs
-        initial_sparsity: Initial sparsity (0.0 - 1.0). If None, uses config value.
-        target_sparsity: Target sparsity (0.0 - 1.0). If None, uses config value.
+        initial_sparsity: Initial sparsity (0.0 - 1.0)
+        target_sparsity: Target sparsity (0.0 - 1.0)
         prune_epochs: List of epochs when to apply pruning. If None, auto-calculates.
-        config: Pruning configuration. If None, uses PRUNING_CFG.
         
     Returns:
         Tuple of (ModelPruner instance, pruning_hook function)
@@ -362,11 +361,10 @@ def apply_pruning_schedule(
     # Set up pruning schedule
     if prune_epochs is None:
         # Default: start after warmup and prune every 2 epochs
-        start_epoch = config.warmup_epochs
-        end_epoch = epochs - (config.fine_tune_epochs if config.fine_tune_after_pruning else 0)
+        start_epoch = getattr(config, 'warmup_epochs', 1)
+        end_epoch = epochs - (getattr(config, 'fine_tune_epochs', 0) if getattr(config, 'fine_tune_after_pruning', False) else 0)
         prune_epochs = list(range(start_epoch, end_epoch, 2))
     
-    # Create pruning hook function
     def pruning_hook(epoch: int, **kwargs) -> None:
         if epoch in prune_epochs:
             # Calculate current target sparsity
@@ -379,7 +377,8 @@ def apply_pruning_schedule(
             print(f"{'='*50}")
             
             # Apply pruning
-            pruner.global_prune(amount=target, verbose=True)
+            pruner.prune_model(target_sparsity=target)
+            print(pruner.get_pruning_summary())
             
             # Print model size and FLOPs if available
             try:
@@ -391,33 +390,5 @@ def apply_pruning_schedule(
                 print(f"FLOPs: {macs/1e9:.2f} GFLOPs")
             except ImportError:
                 pass
-    """
-    Apply gradual pruning schedule over training.
-    
-    Args:
-        model: Model to prune
-        epochs: Total number of training epochs
-        initial_sparsity: Initial sparsity (0.0 - 1.0)
-        target_sparsity: Target sparsity (0.0 - 1.0)
-        prune_epochs: List of epochs when to apply pruning (default: every 2 epochs)
-        
-    Returns:
-        ModelPruner instance for further pruning operations
-    """
-    if prune_epochs is None:
-        # Default: prune every 2 epochs
-        prune_epochs = list(range(0, epochs, 2))
-    
-    pruner = ModelPruner(model)
-    pruner.prepare_for_pruning()
-    
-    def pruning_hook(epoch: int, **kwargs) -> None:
-        if epoch in prune_epochs:
-            # Calculate current target sparsity
-            progress = (prune_epochs.index(epoch) + 1) / len(prune_epochs)
-            target = initial_sparsity + (target_sparsity - initial_sparsity) * (progress ** 3)
-            
-            print(f"\nPruning at epoch {epoch} to {target:.1%} sparsity")
-            pruner.global_prune(amount=target)
     
     return pruner, pruning_hook

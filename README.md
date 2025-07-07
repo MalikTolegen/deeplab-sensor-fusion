@@ -1,16 +1,20 @@
-# DeepLabV3+ with CBAM for Semantic Segmentation
+# DeepLabV3+ with CBAM and Sensor Fusion
 
-An advanced implementation of DeepLabV3+ with Convolutional Block Attention Module (CBAM) for semantic segmentation tasks, featuring model optimization techniques including quantization-aware training and pruning.
+An advanced implementation of DeepLabV3+ with Convolutional Block Attention Module (CBAM) and sensor fusion for semantic segmentation tasks. This implementation includes model optimization techniques like quantization-aware training and pruning, with a focus on fusing visual and sensor data for improved segmentation performance.
 
 ## Key Features
 
 - **DeepLabV3+ Architecture**: State-of-the-art semantic segmentation model
 - **CBAM Integration**: Convolutional Block Attention Module for improved feature extraction
+- **Sensor Fusion**: Combines visual and sensor data for enhanced segmentation
 - **Model Optimization**:
   - Quantization-Aware Training (QAT) for efficient inference
-  - Post-Training Quantization (PTQ)
   - Structured and unstructured pruning
   - Model fusion for optimized performance
+- **Experiment Framework**:
+  - Automated experiment runner for different configurations
+  - Performance comparison across batch sizes and pruning settings
+  - TensorBoard integration for training visualization
 - **Flexible Configuration**: Easy-to-configure training and optimization parameters
 - **Multi-Backend Support**: Compatible with various hardware backends including CUDA and CPU
 
@@ -22,13 +26,16 @@ An advanced implementation of DeepLabV3+ with Convolutional Block Attention Modu
 │   ├── model_cfg.py     # Model architecture and training configurations
 │   └── optimization_cfg.py  # Optimization settings (quantization, pruning)
 ├── models/              # Model implementations
-│   ├── deeplabv3/       # DeepLabV3+ implementation
+│   ├── deeplabv3/       # DeepLabV3+ implementation with CBAM
+│   ├── fusion/          # Sensor fusion modules
 │   └── cbam/            # Convolutional Block Attention Module
 ├── utils/               # Utility functions
-│   ├── quantization_utils.py  # Model quantization utilities
-│   └── pruning_utils.py       # Model pruning utilities
-├── train.py            # Main training script
-├── train_qat.py        # Quantization-aware training script
+│   ├── metrics.py       # Evaluation metrics (IoU, F1, etc.)
+│   ├── pruning_utils.py # Model pruning utilities
+│   └── visualization.py # Visualization utilities
+├── experiment_runner.py # Script to run multiple experiments
+├── analyze_results.py   # Analyze and visualize experiment results
+├── main.py             # Main training and evaluation script
 └── requirements.txt    # Python dependencies
 ```
 
@@ -36,10 +43,11 @@ An advanced implementation of DeepLabV3+ with Convolutional Block Attention Modu
 
 ### Prerequisites
 
-- Python 3.8+
-- PyTorch 1.8+
-- CUDA 11.0+ (for GPU acceleration)
+- Python 3.10+
+- PyTorch 2.0+
+- CUDA 12.2+ (for GPU acceleration)
 - cuDNN 8.0+
+- NVIDIA GPU with at least 12GB VRAM (for training)
 
 ### Installation
 
@@ -66,36 +74,61 @@ An advanced implementation of DeepLabV3+ with Convolutional Block Attention Modu
    ```
    dataset/
    ├── train/
-   │   ├── images/
-   │   └── masks/
+   │   ├── images/        # RGB images
+   │   ├── masks/         # Segmentation masks
+   │   └── sensors/       # Sensor data (e.g., depth, LiDAR)
    └── val/
        ├── images/
-       └── masks/
+       ├── masks/
+       └── sensors/
    ```
 
-2. Update the dataset paths in `config/model_cfg.py`
+2. Update the dataset paths and sensor configuration in `config/model_cfg.py`
 
 ## Usage
 
-### Standard Training
+### Single Experiment
 
+Run a single training experiment with the default configuration:
 ```bash
-python train.py --config config/model_cfg.py
+python main.py
 ```
 
-### Quantization-Aware Training
+### Run Multiple Experiments
 
+Use the experiment runner to test different configurations:
 ```bash
-python train_qat.py --config config/model_cfg.py --quantize
+python experiment_runner.py
+```
+This will run experiments with different batch sizes and pruning configurations, saving results in the `experiments` directory.
+
+### Analyze Results
+
+After running experiments, analyze and visualize the results:
+```bash
+python analyze_results.py
 ```
 
-### Model Pruning
+### TensorBoard Visualization
 
+Monitor training progress with TensorBoard:
 ```bash
-python train.py --config config/model_cfg.py --prune
+tensorboard --logdir=experiments
 ```
 
-### Exporting Quantized Model
+### Key Configuration Options
+
+In `config/model_cfg.py`:
+- `MODEL_CFG`: Model architecture and training parameters
+- `PRUNING_CFG`: Pruning configuration (enabled, target sparsity, etc.)
+- `DATA_CFG`: Dataset paths and preprocessing settings
+- `TRAIN_CFG`: Training hyperparameters (batch size, epochs, etc.)
+
+### Model Checkpoints
+
+- Best model (by validation IoU): `experiments/[experiment_name]/best_model.pth`
+- Checkpoints: Saved every 5 epochs in the experiment directory
+- Training logs: TensorBoard events and CSV metrics in the experiment directory
 
 ```python
 from utils.quantization_utils import quantize_model, save_quantized_model

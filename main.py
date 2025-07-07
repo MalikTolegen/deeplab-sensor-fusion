@@ -3,12 +3,14 @@ import json
 import time
 import datetime
 from tqdm import tqdm
+from pathlib import Path
 
 import torch
 from torch import nn
 from torch.optim import SGD, Adam
 import torchvision
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import Compose
 import cv2
 import numpy as np
@@ -18,8 +20,9 @@ from config.model_cfg import *
 from models import get_model
 from utils import ImgClsDataset
 from utils import get_transforms
+from utils.pruning_utils import apply_pruning_schedule
+from utils.metrics import calculate_metrics, analyze_pruning
 from models.loss import DiceFocalLoss
-from models.metrics import meanIoU
 from util import base_collate_fn
 from config.model_cfg import DEVICE
 
@@ -93,13 +96,30 @@ def model_load(model):
         
         # Load the state dict into the model
         model.load_state_dict(state_dict, strict=False)
-        start_epoch = int(MODEL_CFG.load_from.split('/')[-1].split('.')[0])
-        return model, start_epoch
+        # For pre-trained weights, always start from epoch 0
+        return model, 0
     else:
         return model, 0
 
 
 def train():
+    # Setup experiment tracking
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_dir = f"runs/experiment_{timestamp}"
+    os.makedirs(log_dir, exist_ok=True)
+    writer = SummaryWriter(log_dir)
+    
+    # Save config
+    config_dict = {
+        'batch_size': TRAIN_DATALOADER_CFG.batch_size,
+        'pruning_enabled': PRUNING_CFG.enabled,
+        'target_sparsity': getattr(PRUNING_CFG, 'target_sparsity', 0),
+        'epochs': TRAIN_CFG.num_epoch
+    }
+    with open(f"{log_dir}/config.json", 'w') as f:
+        json.dump(config_dict, f, indent=2)
+
+    # Setup data loaders
     train_anno_path = os.path.join(DATA_CFG.root_path, DATA_CFG.train_anno_path)
     with open(train_anno_path, 'r') as rf:
         train_anno = json.load(rf)
@@ -110,15 +130,14 @@ def train():
     transforms_lst = Compose(transforms_lst)
     
     train_dataset = ImgClsDataset(DATA_CFG, 
-                                  train_anno,
-                                  transforms=transforms_lst
-                                  )
+                                 train_anno,
+                                 transforms=transforms_lst)
 
     train_dataloader = DataLoader(dataset=train_dataset,
-                                  batch_size=TRAIN_DATALOADER_CFG.batch_size,
-                                  shuffle=TRAIN_DATALOADER_CFG.shuffle,
-                                  num_workers=TRAIN_DATALOADER_CFG.num_worker,
-                                  collate_fn=base_collate_fn)
+                                 batch_size=TRAIN_DATALOADER_CFG.batch_size,
+                                 shuffle=TRAIN_DATALOADER_CFG.shuffle,
+                                 num_workers=TRAIN_DATALOADER_CFG.num_worker,
+                                 collate_fn=base_collate_fn)
 
     valid_anno_path = os.path.join(
         DATA_CFG.root_path,
@@ -156,6 +175,7 @@ def train():
         print("\nInitializing pruning...")
         pruner, pruning_hook = apply_pruning_schedule(
             model=model,
+            config=PRUNING_CFG,
             epochs=TRAIN_CFG.num_epoch,
             initial_sparsity=PRUNING_CFG.initial_sparsity,
             target_sparsity=PRUNING_CFG.target_sparsity,
@@ -176,33 +196,83 @@ def train():
 
     remaining_iters = len(train_dataloader) * (TRAIN_CFG.num_epoch - start_epoch + 1)
 
+    # Training loop
+    global_step = 0
+    best_iou = 0.0
+    log_losses = []  # Initialize log_losses list
+    
     for epoch in range(start_epoch, total_epoch+1):
         # Apply pruning if enabled and it's time to prune
         if pruning_hook is not None:
             pruning_hook(epoch)
+        
+        # Log sparsity if pruning is enabled
+        if PRUNING_CFG.enabled and epoch > 0:
+            sparsity_info = analyze_pruning(model)
+            writer.add_scalar('Sparsity/Overall', sparsity_info['sparsity'], epoch)
+            print(f"Epoch {epoch}: Model sparsity = {sparsity_info['sparsity']:.2f}%")
             
         batch_cnt = 0
-        log_losses = list()
+        epoch_loss = 0.0
         model = model.train()
-        for images, masks, sensors, annotations in train_dataloader:
+        
+        # Progress bar
+        pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{total_epoch}")
+        
+        # Initialize gradient accumulation
+        grad_accum_steps = getattr(TRAIN_CFG, 'grad_accum_steps', 1)
+        optim.zero_grad()
+        
+        for batch_idx, (images, masks, sensors, annotations) in enumerate(pbar):
+            global_step += 1
             batch_cnt += 1
             start_time = time.time()
-            # images = images
-            outs = model(model, images=images, sensors=sensors)['out'].squeeze()
-            losses = dict(
-                loss=loss_fn(outs, masks)
-            )
-
-            log_losses.append(get_loss_for_loss(losses))
-            losses = sum(losses.values())
-            losses.backward()
-            if batch_cnt % TRAIN_CFG.accum_step == 0:
+            
+            # Move data to device
+            images = images.to(DEVICE)
+            masks = masks.to(DEVICE)
+            sensors = sensors.to(DEVICE) if sensors is not None else None
+            
+            # Forward pass
+            outs = model(images=images, sensors=sensors)['out'].squeeze()
+            
+            # Calculate loss with gradient accumulation
+            loss = loss_fn(outs, masks) / grad_accum_steps
+            
+            # Backward pass
+            loss.backward()
+            
+            # Update metrics (scale up since we divided by grad_accum_steps)
+            epoch_loss += loss.item() * grad_accum_steps
+            
+            # Step the optimizer and zero gradients if we've accumulated enough gradients
+            if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(train_dataloader):
                 optim.step()
                 optim.zero_grad()
-                # lr_scheduler.step()
+            
+            # Log batch metrics
+            if batch_cnt % TRAIN_CFG.log_step == 0:
+                # Calculate metrics
+                with torch.no_grad():
+                    metrics = calculate_metrics(outs.detach(), masks.detach() > 0.5)
+                
+                # Log to TensorBoard
+                writer.add_scalar('Loss/train', loss.item() * grad_accum_steps, global_step)
+                for metric_name, metric_value in metrics.items():
+                    writer.add_scalar(f'Metrics/train_{metric_name}', metric_value, global_step)
+                
+                # Update progress bar
+                pbar.set_postfix({
+                    'loss': f"{loss.item() * grad_accum_steps:.4f}",
+                    'iou': f"{metrics['iou']:.4f}",
+                    'grad_accum': f"{grad_accum_steps}x"
+                })
 
             iter_time = time.time() - start_time
-            log_losses[-1].update(time=iter_time)
+            if not log_losses:  # If log_losses is empty, append a new dict
+                log_losses.append({'time': iter_time})
+            else:
+                log_losses[-1].update(time=iter_time)
 
             if batch_cnt % TRAIN_CFG.log_step == 0 or batch_cnt == len(train_dataloader):
                 now = datetime.datetime.now().strftime("%y/%m/%d %H:%M:%S")
@@ -211,69 +281,159 @@ def train():
                 log_losses = list()
                 print(log_msg, flush=True)
 
-        # Save model state (make sure to remove pruning buffers before saving)
-        if pruning_hook is not None:
-            # Create a deep copy of the model without pruning buffers
-            from copy import deepcopy
-            model_copy = deepcopy(model)
-            for name, module in model_copy.named_modules():
-                if hasattr(module, 'weight_orig'):
-                    # Remove pruning buffers
-                    prune.remove(module, 'weight')
-            torch.save(model_copy.state_dict(), f"output/{epoch}.pth")
-            del model_copy
-        else:
-            torch.save(model.state_dict(), f"output/{epoch}.pth")
+        # Validation
+        if (epoch + 1) % 1 == 0:
+            model.eval()
+            val_loss = 0.0
+            val_metrics = {'iou': 0.0, 'f1': 0.0, 'precision': 0.0, 'recall': 0.0}
+            val_batches = 0
+            
+            with torch.no_grad():
+                for images, masks, sensors, _ in valid_dataloader:
+                    images = images.to(DEVICE)
+                    masks = masks.to(DEVICE)
+                    sensors = sensors.to(DEVICE) if sensors is not None else None
+                    
+                    outs = model(images=images, sensors=sensors)['out'].squeeze()
+                    batch_loss = loss_fn(outs, masks)
+                    
+                    val_loss += batch_loss.item()
+                    batch_metrics = calculate_metrics(outs, masks > 0.5)
+                    
+                    # Accumulate metrics
+                    for k in val_metrics:
+                        val_metrics[k] += batch_metrics[k]
+                    val_batches += 1
+            
+            # Average metrics
+            val_loss /= val_batches
+            for k in val_metrics:
+                val_metrics[k] /= val_batches
+            
+            # Log validation metrics
+            print(f"\nValidation - Loss: {val_loss:.4f}, "
+                  f"IoU: {val_metrics['iou']:.4f}, "
+                  f"F1: {val_metrics['f1']:.4f}")
+            
+            # Log to TensorBoard
+            writer.add_scalar('Loss/val', val_loss, epoch)
+            for metric_name, metric_value in val_metrics.items():
+                writer.add_scalar(f'Metrics/val_{metric_name}', metric_value, epoch)
+            
+            # Save best model
+            if val_metrics['iou'] > best_iou:
+                best_iou = val_metrics['iou']
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optim.state_dict(),
+                    'val_iou': best_iou,
+                    'val_loss': val_loss,
+                }, f"{log_dir}/best_model.pth")
+                print(f"Saved new best model with IoU: {best_iou:.4f}")
+        
+        # Save checkpoint
+        if (epoch + 1) % 5 == 0:  # Save every 5 epochs
+            checkpoint_path = f"{log_dir}/checkpoint_epoch_{epoch+1}.pth"
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optim.state_dict(),
+                'val_iou': best_iou,
+            }, checkpoint_path)
+            print(f"Saved checkpoint to {checkpoint_path}")
+    
+    # Save final model
+    final_model_path = f"{log_dir}/final_model.pth"
+    torch.save({
+        'epoch': total_epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optim.state_dict(),
+        'val_iou': best_iou,
+        'val_loss': val_loss if 'val_loss' in locals() else None,
+        'config': config_dict
+    }, final_model_path)
+    
+    print(f"\nTraining complete! Best validation IoU: {best_iou:.4f}")
+    print(f"Run 'tensorboard --logdir={log_dir}' to view metrics.")
+    
+    return best_iou
 
-        model = model.eval()
-        miou_lst = []
-        with torch.no_grad():
-            for images, masks, sensors, _ in valid_dataloader:
-                outs = model(model, images, sensors)['out'].squeeze().detach().cpu()
-                miou_lst.append(meanIoU(outs, masks.detach().cpu()))
 
-        print(f"[{now}] Epoch(Valid) [{epoch}/{total_epoch}] mIoU: {sum(miou_lst) / len(miou_lst):.4f}")
-
-
-def valid():
-    valid_anno_path = os.path.join(
-        DATA_CFG.root_path,
-        DATA_CFG.valid_anno_path
-    )
-
+def valid(model_path=None):
+    """Run validation on the validation set.
+    
+    Args:
+        model_path: Path to the model checkpoint. If None, uses the model from MODEL_CFG.
+    """
+    # Setup data loader
+    valid_anno_path = os.path.join(DATA_CFG.root_path, DATA_CFG.valid_anno_path)
+    
     with open(valid_anno_path, 'r') as rf:
         valid_anno = json.load(rf)
 
-    transforms_lst = []
-    for config in VALID_PIPE:
-        transforms_lst.append(get_transforms(config))
-    transforms_lst = Compose(transforms_lst)
-
-    valid_dataset = ImgClsDataset(
-        DATA_CFG,
-        valid_anno,
-        transforms=transforms_lst
-    )
-
+    transforms_lst = Compose([get_transforms(config) for config in VALID_PIPE])
+    valid_dataset = ImgClsDataset(DATA_CFG, valid_anno, transforms=transforms_lst)
+    
     valid_dataloader = DataLoader(
         dataset=valid_dataset,
         batch_size=VALID_DATALOADER_CFG.batch_size,
-        shuffle=VALID_DATALOADER_CFG.shuffle,
+        shuffle=False,  # No need to shuffle for validation
         num_workers=VALID_DATALOADER_CFG.num_worker,
         collate_fn=base_collate_fn
     )
 
-    model = get_model(MODEL_TYPE, MODEL_CFG)
-    if MODEL_CFG.load_from is not None:
+    # Initialize model
+    model = get_model(MODEL_TYPE, MODEL_CFG).to(DEVICE)
+    
+    # Load weights if provided
+    if model_path and os.path.exists(model_path):
+        checkpoint = torch.load(model_path, map_location=DEVICE)
+        if 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint)
+        print(f"Loaded model from {model_path}")
+    elif MODEL_CFG.load_from:
         model, _ = model_load(model)
-
-    model = model.to(DEVICE)
-    miou_lst = []
-    for images, masks, sensors, _ in tqdm(valid_dataloader):
-        outs = model(model, images, sensors)['out'].squeeze().detach().cpu()
-        miou_lst.append(meanIoU(outs, masks.detach().cpu()))
-
-    print(f"mIoU: {sum(miou_lst) / len(miou_lst):.4f}")
+    
+    # Validate
+    model.eval()
+    val_loss = 0.0
+    val_metrics = {'iou': 0.0, 'f1': 0.0, 'precision': 0.0, 'recall': 0.0}
+    val_batches = 0
+    
+    with torch.no_grad():
+        for images, masks, sensors, _ in tqdm(valid_dataloader, desc="Validating"):
+            images = images.to(DEVICE)
+            masks = masks.to(DEVICE)
+            sensors = sensors.to(DEVICE) if sensors is not None else None
+            
+            # Forward pass
+            outs = model(images=images, sensors=sensors)['out'].squeeze()
+            
+            # Calculate loss and metrics
+            loss = nn.MSELoss()(outs, masks)
+            batch_metrics = calculate_metrics(outs, masks > 0.5)
+            
+            # Accumulate
+            val_loss += loss.item()
+            for k in val_metrics:
+                val_metrics[k] += batch_metrics[k]
+            val_batches += 1
+    
+    # Calculate averages
+    val_loss /= val_batches
+    for k in val_metrics:
+        val_metrics[k] /= val_batches
+    
+    # Print results
+    print("\nValidation Results:")
+    print(f"Loss: {val_loss:.4f}")
+    for name, value in val_metrics.items():
+        print(f"{name.upper()}: {value:.4f}")
+    
+    return {'loss': val_loss, **val_metrics}
 
 
 def test():

@@ -29,24 +29,29 @@ from entity import (
 from .fusion import SensorVisionFusion
 
 
-def _new_forward(self, images: Tensor, sensors: List) -> Dict[str, Tensor]:
+def _new_forward(self, images: Tensor, sensors: List = None) -> Dict[str, Tensor]:
     input_shape = images.shape[-2:]
     # contract: features is a dict of tensors
     vi_features = self.backbone(images)
 
-    fused_features = self.fusion(vi_features["out"], sensors)
-    result = OrderedDict()
-    # x = vi_features["out"]
-    x = self.classifier(fused_features) # CBAM
+    # Handle case where sensors might be None
+    if sensors is None:
+        x = vi_features["out"]
+    else:
+        fused_features = self.fusion(vi_features["out"], sensors)
+        x = self.classifier(fused_features)  # CBAM
+    
     x = F.interpolate(x, size=input_shape, mode="bilinear", align_corners=False)
-    result["out"] = x
+    result = {"out": x}
 
-    if self.aux_classifier is not None:
-        x = vi_features["aux"]
-        fused_features = self.aux_fusion(vi_features["aux"], sensors)
-        x = self.aux_classifier(fused_features)
-        x = F.interpolate(x, size=input_shape, mode="bilinear", align_corners=False)
-        result["aux"] = x
+    if hasattr(self, 'aux_classifier') and self.aux_classifier is not None:
+        aux = vi_features.get("aux")
+        if aux is not None:
+            if sensors is not None and hasattr(self, 'aux_fusion'):
+                aux = self.aux_fusion(aux, sensors)
+            aux = self.aux_classifier(aux)
+            aux = F.interpolate(aux, size=input_shape, mode="bilinear", align_corners=False)
+            result["aux"] = aux
 
     return result
 
@@ -61,7 +66,9 @@ def __get_deeplab_model(config: Deeplabv3Entity):
         else:
             model.classifier = DeepLabHead(2048, config.num_classes)
         
-        model.forward = _new_forward
+        # Use MethodType to properly bind the method to the instance
+        from types import MethodType
+        model.forward = MethodType(_new_forward, model)
         return model
     elif config.type == DEEPLABTYPE.RESNET101:
         model = deeplabv3_resnet101(**config.params)
@@ -91,9 +98,16 @@ def __get_maskrcnn_model(config: MaskRcnnEntity):
 
 
 def get_model(model_type, config):
-    if model_type == MODELTYPE.DEEPLABV3:
+    print(f"[DEBUG] model_type: {model_type}, type: {type(model_type)}")
+    print(f"[DEBUG] MODELTYPE.DEEPLABV3: {MODELTYPE.DEEPLABV3}, type: {type(MODELTYPE.DEEPLABV3)}")
+    print(f"[DEBUG] model_type == MODELTYPE.DEEPLABV3: {model_type == MODELTYPE.DEEPLABV3}")
+    print(f"[DEBUG] model_type.value: {model_type.value if hasattr(model_type, 'value') else 'N/A'}")
+    print(f"[DEBUG] MODELTYPE.DEEPLABV3.value: {MODELTYPE.DEEPLABV3.value}")
+    
+    # Try comparing by value as well
+    if model_type == MODELTYPE.DEEPLABV3 or model_type.value == MODELTYPE.DEEPLABV3.value:
         return __get_deeplab_model(config)
-    elif model_type == MODELTYPE.MASKRCNN:
+    elif model_type == MODELTYPE.MASKRCNN or model_type.value == MODELTYPE.MASKRCNN.value:
         return __get_maskrcnn_model(config)
     else:
-        raise NotImplementedError(f"{model_type} is not supported.")
+        raise NotImplementedError(f"{model_type} (value: {model_type.value if hasattr(model_type, 'value') else 'N/A'}) is not supported. Available types: {list(MODELTYPE.__members__.keys())}")

@@ -1,3 +1,4 @@
+import torch
 from type import (
     MODELTYPE,
     DEEPLABTYPE,
@@ -15,8 +16,7 @@ from entity import (
 from entity.utils.dataloader_entity import DataloaderEntity
 from entity.utils.train_entity import TrainEntity
 from entity.utils.data_entity import DataEntity
-from entity.utils.model_entity import ModelEntity, MODELTYPE
-from entity.utils.augmentation_entity import AugmentationEntity
+from entity.utils.model_entity import ModelEntity
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
@@ -142,8 +142,12 @@ MODEL_CFG = {
         use_cbam=True,
         params=dict(
             pretrained=True,
+            # Ensure batch norm uses running stats for small batch sizes
+            norm_layer=lambda *args, **kwargs: torch.nn.BatchNorm2d(
+                *args, **kwargs, momentum=0.1, eps=1e-5
+            )
         ),
-        load_from="resource/cls_weights.pth"
+        load_from="/home/allbigdat/workspace/cls_load/resource/cls_weights.pth"
     ),
     MODELTYPE.MASKRCNN: MaskRcnnEntity(
         type=MASKRCNNTYPE.RESNET50V2,
