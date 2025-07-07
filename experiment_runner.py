@@ -15,12 +15,12 @@ class ExperimentRunner:
         os.makedirs(self.results_dir, exist_ok=True)
         
     def run_experiments(self):
-        # Define experiment grid with larger batch sizes
-        batch_sizes = [8, 16, 32]  # Increased minimum batch size
+        # Define experiment grid with stable batch sizes
+        batch_sizes = [16, 32, 64]  # Larger batch sizes for stability
         pruning_configs = [
-            {'enabled': True, 'target_sparsity': 0.3, 'grad_accum_steps': 2},
-            {'enabled': True, 'target_sparsity': 0.5, 'grad_accum_steps': 2},
-            {'enabled': False, 'grad_accum_steps': 1}
+            {'enabled': True, 'target_sparsity': 0.3},
+            {'enabled': True, 'target_sparsity': 0.5},
+            {'enabled': False}
         ]
         
         results = []
@@ -41,13 +41,10 @@ class ExperimentRunner:
                 TRAIN_DATALOADER_CFG.batch_size = batch_size
                 VALID_DATALOADER_CFG.batch_size = batch_size * 2
                 
-                # Update pruning config and training settings
+                # Update pruning config
                 for key, value in prune_cfg.items():
                     if hasattr(PRUNING_CFG, key):
                         setattr(PRUNING_CFG, key, value)
-                
-                # Set gradient accumulation steps
-                TRAIN_CFG.grad_accum_steps = prune_cfg.get('grad_accum_steps', 1)
                 
                 # Save experiment config
                 config = {

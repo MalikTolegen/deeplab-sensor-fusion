@@ -219,11 +219,7 @@ def train():
         # Progress bar
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{total_epoch}")
         
-        # Initialize gradient accumulation
-        grad_accum_steps = getattr(TRAIN_CFG, 'grad_accum_steps', 1)
-        optim.zero_grad()
-        
-        for batch_idx, (images, masks, sensors, annotations) in enumerate(pbar):
+        for images, masks, sensors, annotations in pbar:
             global_step += 1
             batch_cnt += 1
             start_time = time.time()
@@ -234,21 +230,18 @@ def train():
             sensors = sensors.to(DEVICE) if sensors is not None else None
             
             # Forward pass
+            optim.zero_grad()
             outs = model(images=images, sensors=sensors)['out'].squeeze()
             
-            # Calculate loss with gradient accumulation
-            loss = loss_fn(outs, masks) / grad_accum_steps
+            # Calculate loss
+            loss = loss_fn(outs, masks)
             
-            # Backward pass
+            # Backward pass and optimize
             loss.backward()
+            optim.step()
             
-            # Update metrics (scale up since we divided by grad_accum_steps)
-            epoch_loss += loss.item() * grad_accum_steps
-            
-            # Step the optimizer and zero gradients if we've accumulated enough gradients
-            if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(train_dataloader):
-                optim.step()
-                optim.zero_grad()
+            # Update metrics
+            epoch_loss += loss.item()
             
             # Log batch metrics
             if batch_cnt % TRAIN_CFG.log_step == 0:
@@ -257,15 +250,14 @@ def train():
                     metrics = calculate_metrics(outs.detach(), masks.detach() > 0.5)
                 
                 # Log to TensorBoard
-                writer.add_scalar('Loss/train', loss.item() * grad_accum_steps, global_step)
+                writer.add_scalar('Loss/train', loss.item(), global_step)
                 for metric_name, metric_value in metrics.items():
                     writer.add_scalar(f'Metrics/train_{metric_name}', metric_value, global_step)
                 
                 # Update progress bar
                 pbar.set_postfix({
-                    'loss': f"{loss.item() * grad_accum_steps:.4f}",
-                    'iou': f"{metrics['iou']:.4f}",
-                    'grad_accum': f"{grad_accum_steps}x"
+                    'loss': f"{loss.item():.4f}",
+                    'iou': f"{metrics['iou']:.4f}"
                 })
 
             iter_time = time.time() - start_time
