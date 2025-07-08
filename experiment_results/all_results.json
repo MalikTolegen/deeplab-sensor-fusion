@@ -1,18 +1,74 @@
 [
   {
-    "experiment": "bs4_pruneTrue_sp0.3",
-    "batch_size": 4,
+    "experiment": "bs16_pruneTrue_sp0.3",
+    "batch_size": 16,
     "pruning_enabled": true,
     "target_sparsity": 0.3,
-    "error": "Expected more than 1 value per channel when training, got input size torch.Size([1, 4225])",
+    "best_iou": 0.9703134604694629,
+    "status": "completed"
+  },
+  {
+    "experiment": "bs16_pruneTrue_sp0.5",
+    "batch_size": 16,
+    "pruning_enabled": true,
+    "target_sparsity": 0.5,
+    "best_iou": 0.9718027824495404,
+    "status": "completed"
+  },
+  {
+    "experiment": "bs16_pruneFalse_sp0",
+    "batch_size": 16,
+    "pruning_enabled": false,
+    "target_sparsity": 0,
+    "best_iou": 0.9710534299984326,
+    "status": "completed"
+  },
+  {
+    "experiment": "bs32_pruneTrue_sp0.3",
+    "batch_size": 32,
+    "pruning_enabled": true,
+    "target_sparsity": 0.3,
+    "error": "CUDA out of memory. Tried to allocate 1.03 GiB. GPU 0 has a total capacity of 47.54 GiB of which 118.00 MiB is free. Including non-PyTorch memory, this process has 35.62 GiB memory in use. Process 1122960 has 11.74 GiB memory in use. Of the allocated memory 34.88 GiB is allocated by PyTorch, and 425.49 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
     "status": "failed"
   },
   {
-    "experiment": "bs4_pruneTrue_sp0.5",
-    "batch_size": 4,
+    "experiment": "bs32_pruneTrue_sp0.5",
+    "batch_size": 32,
     "pruning_enabled": true,
     "target_sparsity": 0.5,
-    "error": "Expected more than 1 value per channel when training, got input size torch.Size([1, 4225])",
+    "error": "CUDA out of memory. Tried to allocate 1.03 GiB. GPU 0 has a total capacity of 47.54 GiB of which 118.00 MiB is free. Including non-PyTorch memory, this process has 35.62 GiB memory in use. Process 1122960 has 11.74 GiB memory in use. Of the allocated memory 34.88 GiB is allocated by PyTorch, and 425.49 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+    "status": "failed"
+  },
+  {
+    "experiment": "bs32_pruneFalse_sp0",
+    "batch_size": 32,
+    "pruning_enabled": false,
+    "target_sparsity": 0,
+    "error": "CUDA out of memory. Tried to allocate 1.03 GiB. GPU 0 has a total capacity of 47.54 GiB of which 282.00 MiB is free. Including non-PyTorch memory, this process has 35.46 GiB memory in use. Process 1122960 has 11.74 GiB memory in use. Of the allocated memory 33.85 GiB is allocated by PyTorch, and 1.29 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+    "status": "failed"
+  },
+  {
+    "experiment": "bs64_pruneTrue_sp0.3",
+    "batch_size": 64,
+    "pruning_enabled": true,
+    "target_sparsity": 0.3,
+    "error": "CUDA out of memory. Tried to allocate 266.00 MiB. GPU 0 has a total capacity of 47.54 GiB of which 54.00 MiB is free. Including non-PyTorch memory, this process has 35.68 GiB memory in use. Process 1122960 has 11.74 GiB memory in use. Of the allocated memory 35.19 GiB is allocated by PyTorch, and 176.86 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+    "status": "failed"
+  },
+  {
+    "experiment": "bs64_pruneTrue_sp0.5",
+    "batch_size": 64,
+    "pruning_enabled": true,
+    "target_sparsity": 0.5,
+    "error": "CUDA out of memory. Tried to allocate 266.00 MiB. GPU 0 has a total capacity of 47.54 GiB of which 208.00 MiB is free. Including non-PyTorch memory, this process has 35.53 GiB memory in use. Process 1122960 has 11.74 GiB memory in use. Of the allocated memory 35.01 GiB is allocated by PyTorch, and 206.41 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
+    "status": "failed"
+  },
+  {
+    "experiment": "bs64_pruneFalse_sp0",
+    "batch_size": 64,
+    "pruning_enabled": false,
+    "target_sparsity": 0,
+    "error": "CUDA out of memory. Tried to allocate 266.00 MiB. GPU 0 has a total capacity of 47.54 GiB of which 208.00 MiB is free. Including non-PyTorch memory, this process has 35.53 GiB memory in use. Process 1122960 has 11.74 GiB memory in use. Of the allocated memory 35.01 GiB is allocated by PyTorch, and 206.41 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)",
     "status": "failed"
   }
 ]

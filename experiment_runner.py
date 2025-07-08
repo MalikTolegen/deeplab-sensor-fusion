@@ -15,13 +15,17 @@ class ExperimentRunner:
         os.makedirs(self.results_dir, exist_ok=True)
         
     def run_experiments(self):
-        # Define experiment grid with stable batch sizes
-        batch_sizes = [16, 32, 64]  # Larger batch sizes for stability
+        # Define experiment grid with specified batch sizes and sparsities
+        batch_sizes = [8, 12, 16]
+        sparsities = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875]
+        
+        # Create pruning configurations (include both pruned and unpruned cases)
         pruning_configs = [
-            {'enabled': True, 'target_sparsity': 0.3},
-            {'enabled': True, 'target_sparsity': 0.5},
-            {'enabled': False}
+            {'enabled': True, 'target_sparsity': sparsity}
+            for sparsity in sparsities[1:]  # Skip 0.0 for pruned configs
         ]
+        # Add unpruned case
+        pruning_configs.append({'enabled': False})
         
         results = []
         
@@ -57,8 +61,29 @@ class ExperimentRunner:
                     json.dump(config, f, indent=2)
                 
                 try:
+                    # Clear CUDA cache before starting
+                    import torch
+                    torch.cuda.empty_cache()
+                    
+                    # Record memory before training
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                        start_mem = torch.cuda.memory_allocated() / 1024**2  # MB
+                    
+                    import time
+                    start_time = time.time()
+                    
                     # Run training
                     best_iou = train()
+                    
+                    # Calculate training duration
+                    training_time = time.time() - start_time
+                    
+                    # Record memory after training
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                        end_mem = torch.cuda.memory_allocated() / 1024**2  # MB
+                        peak_mem = torch.cuda.max_memory_allocated() / 1024**2  # MB
                     
                     # Record results
                     result = {
@@ -66,26 +91,71 @@ class ExperimentRunner:
                         'batch_size': batch_size,
                         'pruning_enabled': prune_cfg['enabled'],
                         'target_sparsity': prune_cfg.get('target_sparsity', 0),
-                        'best_iou': best_iou,
+                        'best_iou': float(best_iou) if best_iou is not None else None,
+                        'training_time_seconds': training_time,
                         'status': 'completed'
                     }
                     
+                    if torch.cuda.is_available():
+                        result.update({
+                            'initial_memory_mb': start_mem,
+                            'final_memory_mb': end_mem,
+                            'peak_memory_mb': peak_mem,
+                            'memory_usage_mb': end_mem - start_mem
+                        })
+                    
                 except Exception as e:
-                    print(f"Error in experiment {exp_name}: {str(e)}")
+                    error_msg = str(e)
+                    print(f"Error in experiment {exp_name}: {error_msg}")
+                    
+                    # Add CUDA memory info if available
+                    cuda_info = {}
+                    if torch.cuda.is_available():
+                        try:
+                            cuda_info = {
+                                'cuda_memory_allocated_mb': torch.cuda.memory_allocated() / 1024**2,
+                                'cuda_memory_cached_mb': torch.cuda.memory_reserved() / 1024**2,
+                                'cuda_max_memory_allocated_mb': torch.cuda.max_memory_allocated() / 1024**2,
+                                'cuda_device_count': torch.cuda.device_count(),
+                                'cuda_device_name': torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else None
+                            }
+                        except Exception as mem_err:
+                            cuda_info = {'cuda_error': str(mem_err)}
+                    
                     result = {
                         'experiment': exp_name,
                         'batch_size': batch_size,
                         'pruning_enabled': prune_cfg['enabled'],
                         'target_sparsity': prune_cfg.get('target_sparsity', 0),
-                        'error': str(e),
-                        'status': 'failed'
+                        'error': error_msg,
+                        'status': 'failed',
+                        'cuda_info': cuda_info,
+                        'timestamp': datetime.now().isoformat()
                     }
                 
                 results.append(result)
                 
-                # Save results after each experiment
-                with open(os.path.join(self.results_dir, 'all_results.json'), 'w') as f:
-                    json.dump(results, f, indent=2)
+                # Save results after each experiment with backup
+                results_file = os.path.join(self.results_dir, 'all_results.json')
+                # Create a backup if file exists
+                if os.path.exists(results_file):
+                    import shutil
+                    backup_file = os.path.join(self.results_dir, 'all_results_backup.json')
+                    shutil.copy2(results_file, backup_file)
+                
+                # Save with pretty printing
+                with open(results_file, 'w') as f:
+                    # Convert all tensors to python native types for JSON serialization
+                    def convert_tensors(obj):
+                        if isinstance(obj, dict):
+                            return {k: convert_tensors(v) for k, v in obj.items()}
+                        elif isinstance(obj, (list, tuple)):
+                            return [convert_tensors(x) for x in obj]
+                        elif hasattr(obj, 'item'):  # For torch.Tensor and numpy arrays
+                            return obj.item()
+                        return obj
+                    
+                    json.dump(convert_tensors(results), f, indent=2, sort_keys=True)
                 
                 print(f"\nCompleted experiment: {exp_name}")
                 print(f"Best IoU: {result.get('best_iou', 'N/A')}")

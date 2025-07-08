@@ -1,0 +1,6 @@
+{
+  "batch_size": 32,
+  "pruning_enabled": false,
+  "target_sparsity": 0.5,
+  "epochs": 2
+}
