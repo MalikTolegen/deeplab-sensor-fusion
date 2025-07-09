@@ -1,0 +1,8 @@
+{
+  "batch_size": 8,
+  "pruning_config": {
+    "enabled": true,
+    "target_sparsity": 0.25
+  },
+  "start_time": "2025-07-08T16:32:36.686744"
+}

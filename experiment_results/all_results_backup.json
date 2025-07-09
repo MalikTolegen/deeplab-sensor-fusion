@@ -193,18 +193,5 @@
     "status": "completed",
     "target_sparsity": 0.875,
     "training_time_seconds": 4089.1103961467743
-  },
-  {
-    "batch_size": 12,
-    "best_iou": 0.9722748248853799,
-    "experiment": "bs12_pruneFalse_sp0",
-    "final_memory_mb": 711.69970703125,
-    "initial_memory_mb": 715.3154296875,
-    "memory_usage_mb": -3.61572265625,
-    "peak_memory_mb": 17491.46484375,
-    "pruning_enabled": false,
-    "status": "completed",
-    "target_sparsity": 0,
-    "training_time_seconds": 6106.48473739624
   }
 ]

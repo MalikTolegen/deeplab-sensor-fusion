@@ -1,0 +1,7 @@
+{
+  "batch_size": 12,
+  "pruning_config": {
+    "enabled": false
+  },
+  "start_time": "2025-07-09T09:41:52.076485"
+}
