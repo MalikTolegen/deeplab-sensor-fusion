@@ -1,41 +1,37 @@
-# DeepLabV3+ with CBAM and Sensor Fusion
+# DeepLabV3+ with Pruning Optimization
 
-An advanced implementation of DeepLabV3+ with Convolutional Block Attention Module (CBAM) and sensor fusion for semantic segmentation tasks. This implementation includes model optimization techniques like quantization-aware training and pruning, with a focus on fusing visual and sensor data for improved segmentation performance.
+An optimized implementation of DeepLabV3+ for semantic segmentation tasks, featuring:
+- Model pruning for efficient inference
+- Automated experiment framework
+- Performance analysis tools
 
 ## Key Features
 
 - **DeepLabV3+ Architecture**: State-of-the-art semantic segmentation model
-- **CBAM Integration**: Convolutional Block Attention Module for improved feature extraction
-- **Sensor Fusion**: Combines visual and sensor data for enhanced segmentation
-- **Model Optimization**:
-  - Quantization-Aware Training (QAT) for efficient inference
-  - Structured and unstructured pruning
-  - Model fusion for optimized performance
+- **Model Pruning**:
+  - Support for various sparsity levels (0% to 87.5%)
+  - Automated experiment runner for comparing different configurations
+  - Memory and performance monitoring
 - **Experiment Framework**:
-  - Automated experiment runner for different configurations
-  - Performance comparison across batch sizes and pruning settings
-  - TensorBoard integration for training visualization
-- **Flexible Configuration**: Easy-to-configure training and optimization parameters
-- **Multi-Backend Support**: Compatible with various hardware backends including CUDA and CPU
+  - Batch size optimization (tested with 8 and 12)
+  - Pruning impact analysis
+  - Detailed performance metrics (IoU, memory usage, training time)
+- **Results Analysis**:
+  - Automated report generation
+  - Performance comparison across configurations
+  - Memory usage tracking
 
 ## Project Structure
 
 ```
 .
-├── config/               # Configuration files
-│   ├── model_cfg.py     # Model architecture and training configurations
-│   └── optimization_cfg.py  # Optimization settings (quantization, pruning)
-├── models/              # Model implementations
-│   ├── deeplabv3/       # DeepLabV3+ implementation with CBAM
-│   ├── fusion/          # Sensor fusion modules
-│   └── cbam/            # Convolutional Block Attention Module
-├── utils/               # Utility functions
-│   ├── metrics.py       # Evaluation metrics (IoU, F1, etc.)
-│   ├── pruning_utils.py # Model pruning utilities
-│   └── visualization.py # Visualization utilities
-├── experiment_runner.py # Script to run multiple experiments
-├── analyze_results.py   # Analyze and visualize experiment results
-├── main.py             # Main training and evaluation script
+├── experiment_results/  # Experiment results and analysis
+│   ├── all_results.json  # Raw experiment data
+│   └── report.md        # Generated analysis report
+├── runs/               # Training runs and checkpoints
+├── main.py             # Main training script
+├── experiment_runner.py # Run multiple experiments
+├── analyze_results.py  # Generate performance reports
 └── requirements.txt    # Python dependencies
 ```
 
@@ -45,9 +41,8 @@ An advanced implementation of DeepLabV3+ with Convolutional Block Attention Modu
 
 - Python 3.10+
 - PyTorch 2.0+
-- CUDA 12.2+ (for GPU acceleration)
-- cuDNN 8.0+
-- NVIDIA GPU with at least 12GB VRAM (for training)
+- CUDA 11.8+ (for GPU acceleration)
+- NVIDIA GPU with at least 16GB VRAM (recommended for batch size 12)
 
 ### Installation
 
@@ -68,22 +63,24 @@ An advanced implementation of DeepLabV3+ with Convolutional Block Attention Modu
    pip install -r requirements.txt
    ```
 
-### Dataset Preparation
+## Usage
 
-1. Organize your dataset in the following structure:
-   ```
-   dataset/
-   ├── train/
-   │   ├── images/        # RGB images
-   │   ├── masks/         # Segmentation masks
-   │   └── sensors/       # Sensor data (e.g., depth, LiDAR)
-   └── val/
-       ├── images/
-       ├── masks/
-       └── sensors/
+### Running Experiments
+
+1. Configure your experiments in `experiment_runner.py`:
+   - Set batch sizes (tested with 8 and 12)
+   - Configure pruning sparsity levels (0% to 87.5%)
+   - Set number of epochs
+
+2. Run the experiment runner:
+   ```bash
+   python experiment_runner.py
    ```
 
-2. Update the dataset paths and sensor configuration in `config/model_cfg.py`
+3. View results:
+   - Check `experiment_results/all_results.json` for raw data
+   - Run `python analyze_results.py` to generate a report
+   - View TensorBoard logs in the `runs/` directory
 
 ## Usage
 
