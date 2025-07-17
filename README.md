@@ -153,16 +153,6 @@ save_quantized_model(quantized_model, 'quantized_model.pt', example_input_tensor
 - Pruning parameters (amount, method, schedule)
 - Model fusion options
 
-## Performance
-
-### Optimization Results
-
-| Model | mIoU | Params (M) | FPS (RTX 3090) |
-|-------|------|------------|----------------|
-| Baseline | 78.5 | 59.3 | 45.2 |
-| + CBAM | 80.1 | 60.1 | 42.8 |
-| + QAT (FP16) | 79.8 | 60.1 | 68.3 |
-| + Pruning (50%) | 78.9 | 30.2 | 52.1 |
 
 ## License
 
